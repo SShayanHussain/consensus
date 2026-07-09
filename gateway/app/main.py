@@ -15,7 +15,9 @@ from .db import get_db
 from .models import Run, Approval
 
 # Connect to Redis
-REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+REDIS_URL = os.environ.get("REDIS_URL")
+if not REDIS_URL:
+    REDIS_URL = "redis://redis:6379/0"
 redis_conn = Redis.from_url(REDIS_URL)
 q = Queue(connection=redis_conn)
 
