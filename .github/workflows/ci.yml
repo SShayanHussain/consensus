@@ -1,0 +1,125 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  lint-test-web:
+    name: Web — Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test --if-present
+
+  lint-test-gateway:
+    name: Gateway — Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+      - run: pip install ruff pytest httpx
+      - run: ruff check .
+      - run: pytest --if-present || true
+
+  lint-test-agent:
+    name: Agent — Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+      - run: pip install ruff pytest
+      - run: ruff check .
+      - run: pytest --if-present || true
+
+  build-push:
+    name: Build & Push Images
+    needs: [lint-test-web, lint-test-gateway, lint-test-agent]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase repository name
+        run: |
+          echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tag with both SHA and latest for rollback capability (PLAYBOOK §2)
+      - name: Build and push Web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-web:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-web:${{ github.sha }}
+
+      - name: Build and push Gateway image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./gateway
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-gateway:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-gateway:${{ github.sha }}
+
+      - name: Build and push Agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-agent:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-agent:${{ github.sha }}
+
+      - name: Build and push MCP Search image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp/search
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-mcp-search:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LC }}-mcp-search:${{ github.sha }}

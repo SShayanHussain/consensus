@@ -1,0 +1,124 @@
+# Consensus — local development stack
+# Usage: docker compose up --build
+
+services:
+  # --- Postgres (state + audit + LangGraph checkpoints) ---
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: consensus
+      POSTGRES_PASSWORD: consensus
+      POSTGRES_DB: consensus
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consensus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis (agent job queue) ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Next.js Console (web/) ---
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://consensus:consensus@db:5432/consensus
+      REDIS_URL: redis://redis:6379
+      GATEWAY_URL: http://gateway:8000
+      JWT_ACCESS_SECRET: dev-access-secret-change-me-in-prod-32chars!!
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-me-in-prod-32chars!
+      JWT_ACCESS_TTL: 900
+      JWT_REFRESH_TTL: 1209600
+      APP_URL: http://localhost:3000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # --- FastAPI Gateway (gateway/) ---
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://consensus:consensus@db:5432/consensus
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- LangGraph Agent Service (agent/) ---
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://consensus:consensus@db:5432/consensus
+      REDIS_URL: redis://redis:6379
+      GATEWAY_URL: http://gateway:8000
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LLM_MODEL_SUPERVISOR: ${LLM_MODEL_SUPERVISOR:-gemini-2.5-flash}
+      LLM_MODEL_SPECIALIST: ${LLM_MODEL_SPECIALIST:-gemini-2.5-flash}
+      MAX_STEPS_PER_RUN: ${MAX_STEPS_PER_RUN:-25}
+      MAX_TOOL_CALLS_PER_RUN: ${MAX_TOOL_CALLS_PER_RUN:-40}
+      COST_CEILING_USD_PER_RUN: ${COST_CEILING_USD_PER_RUN:-1.50}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # --- MCP Search Tool Server ---
+  mcp-search:
+    build:
+      context: ./mcp/search
+      dockerfile: Dockerfile
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  redisdata:
