@@ -1,33 +1,22 @@
 version: "1"
 
 services:
-  # 1. FastAPI Gateway (Web Service)
+  # 1. Consensus Backend (All-in-one Free Tier)
+  # This runs the Gateway, Agent Worker, and MCP Tool server in a single 
+  # free instance to avoid Render's $7/mo minimum for background workers.
   - type: web
-    name: consensus-gateway
+    name: consensus-backend
     env: python
-    buildCommand: "cd gateway && pip install -r requirements.txt"
-    startCommand: "cd gateway && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    plan: free
+    buildCommand: "pip install -r gateway/requirements.txt -r agent/requirements.txt -r mcp/search/requirements.txt"
+    startCommand: "bash start.sh"
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
         sync: false
       - key: CORS_ORIGINS
-        value: "https://your-vercel-app-url.vercel.app"
-
-  # 2. Agent Worker (Background Worker)
-  # Note: Render's Free Tier does not include Background Workers. 
-  # This service will cost ~$7/mo on Render, or you can merge it into the Gateway to keep it 100% free.
-  - type: worker
-    name: consensus-agent
-    env: python
-    buildCommand: "cd agent && pip install -r requirements.txt"
-    startCommand: "cd agent && rq worker -u $REDIS_URL"
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
+        value: "*"
       - key: GOOGLE_API_KEY
         sync: false
       - key: LANGFUSE_PUBLIC_KEY
@@ -36,10 +25,3 @@ services:
         sync: false
       - key: LANGFUSE_HOST
         value: "https://cloud.langfuse.com"
-
-  # 3. MCP Search Tool (Web Service)
-  - type: web
-    name: consensus-mcp-search
-    env: python
-    buildCommand: "cd mcp/search && pip install -r requirements.txt"
-    startCommand: "cd mcp/search && uvicorn server:app --host 0.0.0.0 --port $PORT"
