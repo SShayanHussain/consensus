@@ -115,6 +115,34 @@ async def get_run(
     }
 
 
+@app.get("/runs")
+async def get_runs(
+    x_workspace_id: str = Header(...),
+    db: Session = Depends(get_db)
+):
+    """Fetch all runs for a workspace."""
+    try:
+        workspace_uuid = uuid.UUID(x_workspace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID.")
+
+    runs = db.query(Run).filter(
+        Run.workspace_id == workspace_uuid
+    ).order_by(Run.created_at.desc()).limit(100).all()
+    
+    return [
+        {
+            "id": r.id,
+            "goal": r.goal,
+            "status": r.status,
+            "step_count": r.step_count,
+            "tool_call_count": r.tool_call_count,
+            "cost_usd": r.cost_usd,
+            "created_at": r.created_at
+        }
+        for r in runs
+    ]
+
 @app.get("/approvals")
 async def get_approvals(
     x_workspace_id: str = Header(...),

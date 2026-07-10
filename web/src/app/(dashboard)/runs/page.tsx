@@ -27,6 +27,26 @@ export default function RunsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runData, setRunData] = useState<RunStatus | null>(null);
+  const [runs, setRuns] = useState<RunStatus[]>([]);
+
+  const fetchRuns = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await fetch("/api/runs", {
+        headers: { "Authorization": `Bearer ${accessToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRuns(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch runs", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchRuns();
+  }, [accessToken]);
 
   const startRun = async () => {
     if (!goal.trim() || !accessToken) return;
@@ -45,6 +65,7 @@ export default function RunsPage() {
       setActiveRunId(data.run_id);
       setGoal("");
       toast.success("Run started successfully");
+      fetchRuns(); // Refresh list
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error starting run");
     } finally {
@@ -69,6 +90,7 @@ export default function RunsPage() {
           
           if (["completed", "failed", "aborted"].includes(data.status)) {
             clearInterval(interval);
+            fetchRuns(); // Refresh list on complete
           }
         }
       } catch (err) {
@@ -142,6 +164,35 @@ export default function RunsPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Run History</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {runs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No runs found for this workspace.</p>
+          ) : (
+            <div className="space-y-4">
+              {runs.map((r) => (
+                <div key={r.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-lg gap-4">
+                  <div className="flex-1 space-y-1">
+                    <p className="font-medium text-sm line-clamp-1" title={r.goal}>{r.goal}</p>
+                    <div className="flex gap-4 text-xs text-muted-foreground">
+                      <span>Status: {r.status}</span>
+                      <span>{new Date(r.created_at).toLocaleString()}</span>
+                      <span>Steps: {r.step_count}</span>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => { setActiveRunId(r.id); setRunData(null); }}>
+                    View details
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
