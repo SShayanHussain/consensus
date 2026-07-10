@@ -1,7 +1,7 @@
 \documentclass[11pt, a4paper]{article}
 
 % Required Packages
-\usepackage[left=0.75in, right=0.75in, top=0.75in, bottom=0.75in]{geometry}
+\usepackage[left=0.5in, right=0.5in, top=0.5in, bottom=0.5in]{geometry}
 \usepackage{enumitem}
 \usepackage{hyperref}
 \usepackage{titlesec}
@@ -14,11 +14,12 @@
     linkcolor=darkblue,
     filecolor=darkblue,      
     urlcolor=darkblue,
+    linktoc=page,
 }
 
 % Formatting Section Headers
 \titleformat{\section}{\large\bfseries\uppercase}{}{0em}{}[\titlerule]
-\titlespacing{\section}{0pt}{12pt}{8pt}
+\titlespacing{\section}{0pt}{8pt}{4pt}
 
 % Disable Paragraph Indentation
 \setlength{\parindent}{0pt}
@@ -113,6 +114,21 @@ Bachelor of Engineering in Computer and Information Systems Engineering \hfill 2
 \begin{itemize}[leftmargin=0.25in, itemsep=2pt]
     \item Built an autonomous campus assistant using a custom ESP32 chassis integrated with an MPU6050 (heading estimation) and HC-SR04 (obstacle detection), achieving a navigation accuracy of 85\%.
     \item Deployed real-time YOLO object detection maintaining 25--30 FPS and integrated the Gemini API for natural language STT/TTS interaction, enabling voice-driven campus navigation.
+\end{itemize}
+
+\textbf{Voice-Enabled Booking Automation System} \hfill \textit{2026}
+\begin{itemize}[leftmargin=0.25in, itemsep=2pt]
+    \item Architected a zero-touch conversational agent utilizing Make.com workflows to orchestrate Calendly, Google Calendar, and OpenAI APIs, streamlining the booking lifecycle to a sub-5-minute process and successfully processing 100+ automated user interactions.
+\end{itemize}
+
+\textbf{Anomaly Detector Computer Vision Pipeline} \hfill \textit{2026}
+\begin{itemize}[leftmargin=0.25in, itemsep=2pt]
+    \item Developed an end-to-end MLOps pipeline (hand-annotating 1,500 images via CVAT and augmenting via Roboflow) to train an RT-DETR-L model with a frozen backbone, achieving 88\% accuracy and a peak mAP of 0.650 for anomaly detection on unseen datasets.
+\end{itemize}
+
+\textbf{Remote Work Productivity Tracker} \hfill \textit{2026}
+\begin{itemize}[leftmargin=0.25in, itemsep=2pt]
+    \item Trained a behavioral classification model on a custom, annotated screen-recording dataset of 1,000 hours to track verified work hours with 80\% accuracy, building a real-time Next.js/Node.js analytics dashboard for administrative oversight.
 \end{itemize}
 
 \end{document}
