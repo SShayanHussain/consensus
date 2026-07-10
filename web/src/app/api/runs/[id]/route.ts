@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 
 export async function GET(
   request: NextRequest,
@@ -13,7 +14,7 @@ export async function GET(
 
     const resolvedParams = await params;
     
-    const response = await fetch(`http://localhost:8000/runs/${resolvedParams.id}`, {
+    const response = await fetch(`${env.GATEWAY_URL}/runs/${resolvedParams.id}`, {
       headers: {
         "x-workspace-id": session.workspaceId,
         "x-user-id": session.userId,

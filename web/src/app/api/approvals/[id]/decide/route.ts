@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 
 export async function POST(
   request: NextRequest,
@@ -14,7 +15,7 @@ export async function POST(
     const resolvedParams = await params;
     const body = await request.json();
 
-    const response = await fetch(`http://localhost:8000/approvals/${resolvedParams.id}/decide`, {
+    const response = await fetch(`${env.GATEWAY_URL}/approvals/${resolvedParams.id}/decide`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

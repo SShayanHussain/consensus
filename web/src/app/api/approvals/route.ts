@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,7 +9,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const response = await fetch("http://localhost:8000/approvals", {
+    const response = await fetch(`${env.GATEWAY_URL}/approvals`, {
       headers: {
         "x-workspace-id": session.workspaceId,
       },
