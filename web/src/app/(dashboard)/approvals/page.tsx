@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAuth } from "@/components/providers/auth-provider";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,13 +23,19 @@ interface ApprovalItem {
 }
 
 export default function ApprovalsPage() {
+  const { accessToken } = useAuth();
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
   const fetchApprovals = async () => {
+    if (!accessToken) return;
     try {
-      const res = await fetch("/api/approvals");
+      const res = await fetch("/api/approvals", {
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setApprovals(data);
@@ -41,18 +48,23 @@ export default function ApprovalsPage() {
   };
 
   useEffect(() => {
+    if (!accessToken) return;
     fetchApprovals();
     // Poll for new approvals every 5 seconds
     const interval = setInterval(fetchApprovals, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [accessToken]);
 
   const handleDecision = async (id: string, status: "approved" | "rejected") => {
+    if (!accessToken) return;
     setDecidingId(id);
     try {
       const res = await fetch(`/api/approvals/${id}/decide`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        },
         body: JSON.stringify({ status, note: "" }),
       });
       if (!res.ok) throw new Error(`Failed to ${status}`);

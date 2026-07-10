@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useAuth } from "@/components/providers/auth-provider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,18 +22,22 @@ interface RunStatus {
 }
 
 export default function RunsPage() {
+  const { accessToken } = useAuth();
   const [goal, setGoal] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runData, setRunData] = useState<RunStatus | null>(null);
 
   const startRun = async () => {
-    if (!goal.trim()) return;
+    if (!goal.trim() || !accessToken) return;
     setSubmitting(true);
     try {
       const res = await fetch("/api/runs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        },
         body: JSON.stringify({ goal }),
       });
       if (!res.ok) throw new Error("Failed to start run");
@@ -48,12 +53,16 @@ export default function RunsPage() {
   };
 
   useEffect(() => {
-    if (!activeRunId) return;
+    if (!activeRunId || !accessToken) return;
     
     // Polling interval
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/runs/${activeRunId}`);
+        const res = await fetch(`/api/runs/${activeRunId}`, {
+          headers: {
+            "Authorization": `Bearer ${accessToken}`
+          }
+        });
         if (res.ok) {
           const data = await res.json();
           setRunData(data);
@@ -68,7 +77,7 @@ export default function RunsPage() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [activeRunId]);
+  }, [activeRunId, accessToken]);
 
   return (
     <div className="space-y-6">
