@@ -1,5 +1,4 @@
 from typing import TypedDict, Literal, Any, Annotated
-import operator
 from langchain_core.messages import BaseMessage
 
 class Source(TypedDict):

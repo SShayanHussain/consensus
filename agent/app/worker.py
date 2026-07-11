@@ -1,34 +1,50 @@
 import os
 import asyncio
+import logging
 from datetime import datetime, timezone
-from sqlalchemy.orm import Session
 from .db import SessionLocal
 from .models import Run, Approval
 from .graph import builder
-from langfuse.callback import CallbackHandler
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
-langfuse_handler = CallbackHandler(
-    public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-mock"),
-    secret_key=os.environ.get("LANGFUSE_SECRET_KEY", "sk-mock"),
-    host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-)
+logger = logging.getLogger(__name__)
 
 POSTGRES_URI = os.environ.get("DATABASE_URL", "postgresql://consensus:consensus@db:5432/consensus")
-# aio psycopg requires asyncpg or psycopg (async)
-ASYNC_POSTGRES_URI = POSTGRES_URI.replace("postgresql://", "postgresql+psycopg://") # Just use sync psycopg string for aio if supported, or psycopg3
 
-def get_db():
-    db = SessionLocal()
+
+def _build_callbacks():
+    """Build tracing callbacks for a run.
+
+    Tracing must never block or fail a run, so any import/instantiation error
+    (e.g. the langfuse v2 -> v3 API change) is swallowed and the run proceeds
+    without a Langfuse trace. Tracing is only enabled when real keys are set.
+    """
+    pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    sk = os.environ.get("LANGFUSE_SECRET_KEY")
+    if not (pk and sk):
+        return []
+    host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
     try:
-        yield db
-    finally:
-        db.close()
+        # langfuse v2
+        from langfuse.callback import CallbackHandler
+        return [CallbackHandler(public_key=pk, secret_key=sk, host=host)]
+    except Exception:  # noqa: BLE001
+        try:
+            # langfuse v3: CallbackHandler moved and reads config from the client/env
+            from langfuse import Langfuse
+            from langfuse.langchain import CallbackHandler
+            Langfuse(public_key=pk, secret_key=sk, host=host)
+            return [CallbackHandler()]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Langfuse tracing disabled: %s", e)
+            return []
+
 
 def run_agent(run_id: str):
     asyncio.run(async_run_agent(run_id))
+
 
 async def async_run_agent(run_id: str):
     db = SessionLocal()
@@ -52,35 +68,31 @@ async def async_run_agent(run_id: str):
             "messages": [],
             "sources": []
         }
-        
+
         config = {
             "configurable": {"thread_id": run_id},
-            "callbacks": [langfuse_handler]
+            "callbacks": _build_callbacks()
         }
 
         async with AsyncPostgresSaver.from_conn_string(POSTGRES_URI) as checkpointer:
             await checkpointer.setup()
             graph = builder.compile(checkpointer=checkpointer)
-            
+
+            # interrupt() surfaces differently across langgraph versions: some
+            # raise GraphInterrupt out of ainvoke, others return with the
+            # interrupt recorded in the checkpoint. Handle both by inspecting
+            # the resulting state snapshot.
             try:
-                final_state = await graph.ainvoke(initial_state, config=config)
-                
-                run_record.status = "completed"
-                run_record.completed_at = datetime.now(timezone.utc)
-                run_record.result = {"draft": final_state.get("draft")}
-                db.commit()
-                print(f"Run {run_id} completed successfully.")
-                
+                await graph.ainvoke(initial_state, config=config)
             except GraphInterrupt:
-                # Graph paused for HITL
+                pass
+
+            snapshot = await graph.aget_state(config)
+
+            if snapshot.next:
+                # Graph paused at the HITL checkpoint awaiting human approval.
                 run_record.status = "awaiting_approval"
-                db.commit()
-                
-                # We need to extract the pending_action from the state
-                state_snapshot = await graph.aget_state(config)
-                pending_action = state_snapshot.values.get("pending_action")
-                
-                # Create Approval record
+                pending_action = snapshot.values.get("pending_action")
                 approval = Approval(
                     run_id=run_record.id,
                     workspace_id=run_record.workspace_id,
@@ -89,6 +101,12 @@ async def async_run_agent(run_id: str):
                 db.add(approval)
                 db.commit()
                 print(f"Run {run_id} paused for human approval.")
+            else:
+                run_record.status = "completed"
+                run_record.completed_at = datetime.now(timezone.utc)
+                run_record.result = {"draft": snapshot.values.get("draft")}
+                db.commit()
+                print(f"Run {run_id} completed successfully.")
 
     except Exception as e:
         print(f"Run {run_id} failed: {e}")
@@ -106,38 +124,51 @@ async def async_run_agent(run_id: str):
 def resume_agent(run_id: str, decision: str, note: str):
     asyncio.run(async_resume_agent(run_id, decision, note))
 
+
 async def async_resume_agent(run_id: str, decision: str, note: str):
     db = SessionLocal()
     try:
         run_record = db.query(Run).filter(Run.id == run_id).first()
         if not run_record:
             return
-            
+
         config = {
             "configurable": {"thread_id": run_id},
-            "callbacks": [langfuse_handler]
+            "callbacks": _build_callbacks()
         }
-        
+
         async with AsyncPostgresSaver.from_conn_string(POSTGRES_URI) as checkpointer:
             graph = builder.compile(checkpointer=checkpointer)
-            
+
             human_response = {"status": decision, "note": note}
-            
+
+            # Resume graph by sending command to the hitl node
             try:
-                # Resume graph by sending command to the hitl node
-                final_state = await graph.ainvoke(Command(resume=human_response), config=config)
-                
+                await graph.ainvoke(Command(resume=human_response), config=config)
+            except GraphInterrupt:
+                pass
+
+            snapshot = await graph.aget_state(config)
+
+            if snapshot.next:
+                # Secondary pause (unlikely) — leave awaiting further approval.
+                run_record.status = "awaiting_approval"
+                db.commit()
+            else:
                 run_record.status = "completed"
                 run_record.completed_at = datetime.now(timezone.utc)
-                run_record.result = {"draft": final_state.get("draft")}
+                run_record.result = {"draft": snapshot.values.get("draft")}
                 db.commit()
                 print(f"Run {run_id} completed successfully after resume.")
-                
-            except GraphInterrupt:
-                pass # Unlikely here, but handles secondary pauses
 
     except Exception as e:
         print(f"Run {run_id} failed during resume: {e}")
         db.rollback()
+        run_record = db.query(Run).filter(Run.id == run_id).first()
+        if run_record:
+            run_record.status = "failed"
+            run_record.error_message = str(e)
+            run_record.completed_at = datetime.now(timezone.utc)
+            db.commit()
     finally:
         db.close()

@@ -58,8 +58,7 @@ async def create_run(
 
     # Plan-Gating (runs/mo ceiling)
     from sqlalchemy import func
-    from datetime import timedelta
-    
+
     first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     monthly_runs = db.query(func.count(Run.id)).filter(
         Run.workspace_id == workspace_uuid,

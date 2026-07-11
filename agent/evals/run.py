@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from agent.app.graph import builder

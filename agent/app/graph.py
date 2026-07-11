@@ -1,13 +1,27 @@
-import os
 from typing import Literal
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from .state import ConsensusState
 from .audit import log_audit_event
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+_llm = None
+
+
+def get_llm():
+    """Lazily construct the LLM.
+
+    Building it at import time means a missing GOOGLE_API_KEY crashes the RQ
+    worker as it imports this module, leaving runs stuck at "queued". Deferring
+    construction lets the error surface inside the run instead, so it is
+    recorded as a failed run with a visible error_message.
+    """
+    global _llm
+    if _llm is None:
+        _llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    return _llm
+
 
 MAX_STEPS = 15
 MAX_COST = 0.50
@@ -56,7 +70,7 @@ async def researcher(state: ConsensusState):
     goal = state["goal"]
     await log_audit_event(state["run_id"], state["workspace_id"], "researcher", "started", {"goal": goal})
     
-    response = await llm.ainvoke([
+    response = await get_llm().ainvoke([
         SystemMessage(content="You are a researcher. Summarize findings for the goal. Use specific facts and numbers."),
         HumanMessage(content=goal)
     ])
@@ -77,14 +91,14 @@ async def analyst(state: ConsensusState):
     
     await log_audit_event(state["run_id"], state["workspace_id"], "analyst", "started", {})
     
-    response = await llm.ainvoke([
+    response = await get_llm().ainvoke([
         SystemMessage(content="You are an analyst. Analyze the research findings and extract key grounded claims."),
         HumanMessage(content=f"Goal: {goal}\nFindings: {findings_text}")
     ])
     
     analysis_text = response.content
     
-    critic = await llm.ainvoke([
+    critic = await get_llm().ainvoke([
         SystemMessage(content="You are a strict self-critic. Read the analysis and the original findings. If the analysis contains claims not present in the findings, output 'UNGROUNDED'. Otherwise, output 'GROUNDED'."),
         HumanMessage(content=f"Findings: {findings_text}\nAnalysis: {analysis_text}")
     ])
@@ -105,7 +119,7 @@ async def writer(state: ConsensusState):
     analysis = state.get("analysis", "")
     await log_audit_event(state["run_id"], state["workspace_id"], "writer", "started", {})
     
-    response = await llm.ainvoke([
+    response = await get_llm().ainvoke([
         SystemMessage(content="You are a professional writer. Write a final cohesive report based on the provided analysis."),
         HumanMessage(content=f"Analysis: {analysis}")
     ])
