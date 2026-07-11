@@ -225,3 +225,69 @@ the code you just wrote.
 - **Redis Gateway Fail-Safe Bootstrapping:** In mixed local and cloud environments, a Redis cache might be optional or run dynamically. Hard dependencies on `REDIS_URL` without fallback logic will crash Gateway boots. Add runtime guards checking configuration strings to alert developers with a clean warning rather than generic stack-trace crashes.
 - **LangGraph Checkpoint Serialization Latency:** When persisting graphs with state size > 1MB (e.g., storing raw PDF inputs or heavy LLM chat history), sync serialization slows down execution dramatically. Configure the checkpointer to write asynchronously or store large payloads separately in S3/Supabase Storage, saving only metadata IDs/refs in the LangGraph state.
 
+---
+
+## 11. Async agent workers — the "stuck run" class (LangGraph + RQ + Gemini on Render/Supabase)
+
+Every one of these presented as "runs never finish" and was solved by reading the worker log,
+not the app log (Golden Rule 2). The stack: Render free tier (one instance = gateway + MCP +
+`rq worker`), Supabase Postgres, Gemini via LangGraph with a Postgres checkpointer.
+
+### The single most important fix: gRPC LLM clients deadlock in a forked worker
+- **Symptom:** run reaches the first LLM call (`researcher calling LLM`) and hangs **forever** at
+  status `running` — no error, no timeout, no further log line.
+- **Cause:** RQ executes each job in a **forked** work-horse. `langchain-google-genai` (and Google
+  SDKs generally) default to a **gRPC** transport whose channels/threads don't survive `fork()`.
+  The `await llm.ainvoke()` blocks indefinitely.
+- **Fix:** force HTTP transport — `ChatGoogleGenerativeAI(..., transport="rest", timeout=60,
+  max_retries=2)`. (Or run a non-forking worker class.) **This is the fix that made runs complete.**
+- **Generalize:** any C-extension/gRPC/async client (gRPC, some HTTP/2 libs, connection pools)
+  initialized before or across a `fork()` is suspect in RQ/Celery-prefork workers. Prefer REST, or
+  create clients lazily *inside* the forked job.
+
+### The "stuck at `queued`" vs "stuck at `running`" triage
+The status the run is frozen at tells you which side of "claiming the job" broke:
+- **Stuck at `queued`** ⇒ the work-horse died **before** running your code (so nothing set
+  `running`). Causes seen: (a) a dependency silently jumped a major version and the module-level
+  import threw — `langfuse>=2.0.0` pulled **v3**, which removed `langfuse.callback.CallbackHandler`
+  and changed its constructor; (b) `rq worker` couldn't import the `app` package because the console
+  script doesn't put CWD on `sys.path`; (c) any other import-time exception in the job module.
+- **Stuck at `running`** ⇒ the job started, then a blocked `await` (see gRPC above) or the process
+  was **OOM-killed** (free tier is 512 MB running 3–4 processes — look for
+  `Work-horse terminated unexpectedly ... signal 9`). The `except` never runs, so the row is frozen.
+
+### Rules to make these impossible to hide (all applied here)
+1. **Pin observability/tracing SDKs to a major version** (`langfuse>=2,<3`), and **tracing must never
+   fail a run** — build callbacks in `try/except → []`, enabled only when real keys exist. A trace
+   backend hiccup should degrade to "no trace", never crash the worker.
+2. **Construct LLM / tracing / heavy clients lazily**, not at module top-level. A missing
+   `GOOGLE_API_KEY` built at import crashes the worker → silent stuck-`queued`; built lazily inside
+   the node it becomes a `failed` row with a real `error_message`.
+3. **Bound every external `await` with `asyncio.wait_for(...)`** (LLM calls, checkpoint setup). On
+   timeout, **re-raise with your own message** — `str(asyncio.TimeoutError())` is `""`, so a raw
+   timeout writes an empty `error_message`. A hang must become a visible `failed`, never `running`.
+4. **Flushed stage markers at every boundary** (`print("... invoking graph", flush=True)`). This
+   converted an opaque hang into a one-glance diagnosis. `flush=True` matters — forked stdout buffers.
+5. **`PYTHONPATH=.`** wherever a bare `rq worker` (or similar) is launched, and `ENV PYTHONPATH=/app`
+   in its Dockerfile.
+
+### LangGraph HITL: `interrupt()` does not raise out of `.ainvoke()`
+- Human-approval pauses were being lost — approvals never created, runs marked `completed`.
+- In current LangGraph, `interrupt()` **returns** from `graph.ainvoke()` with the interrupt recorded
+  in the checkpoint; it does **not** raise `GraphInterrupt` to the caller. `except GraphInterrupt`
+  never fires.
+- **Detect the pause via state:** `snap = await graph.aget_state(config); if snap.next: awaiting_approval
+  else: completed`. Keep `except GraphInterrupt` only as a version-compat fallback.
+
+### Supabase pooler ↔ async checkpointer
+- The pooler rule (§10) is for the **sync** driver. LangGraph's **`AsyncPostgresSaver`** (async
+  psycopg3) uses **prepared statements**, which the Supabase **transaction** pooler (`:6543`) breaks
+  (hangs / `prepared statement already exists`). Use the **session** pooler (`:5432`) for the async
+  checkpointer, or disable prepared statements. Tell-tale: sync writes (`queued→running`) succeed
+  while the async checkpoint path is what's stuck.
+
+### Free-tier packing
+- Don't run gateway + MCP + a forked agent worker in one 512 MB instance and expect big LLM/graph
+  jobs to survive — OOM kills the work-horse mid-run and freezes the row at `running`. Give the
+  worker its own instance (or a bigger one) before load; watch for `signal 9` in logs.
+
