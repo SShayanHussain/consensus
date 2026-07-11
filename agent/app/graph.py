@@ -69,7 +69,8 @@ async def researcher(state: ConsensusState):
     """Researcher node."""
     goal = state["goal"]
     await log_audit_event(state["run_id"], state["workspace_id"], "researcher", "started", {"goal": goal})
-    
+
+    print(f"Run {state['run_id']}: researcher calling LLM", flush=True)
     response = await get_llm().ainvoke([
         SystemMessage(content="You are a researcher. Summarize findings for the goal. Use specific facts and numbers."),
         HumanMessage(content=goal)

@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 POSTGRES_URI = os.environ.get("DATABASE_URL", "postgresql://consensus:consensus@db:5432/consensus")
 
+# Ceilings so a hung LLM/checkpoint call surfaces as a failed run instead of
+# leaving the row stuck at "running" forever.
+CHECKPOINT_SETUP_TIMEOUT = int(os.environ.get("CHECKPOINT_SETUP_TIMEOUT", "60"))
+RUN_TIMEOUT = int(os.environ.get("RUN_TIMEOUT_SECONDS", "300"))
+
 
 def _build_callbacks():
     """Build tracing callbacks for a run.
@@ -47,6 +52,7 @@ def run_agent(run_id: str):
 
 
 async def async_run_agent(run_id: str):
+    print(f"Run {run_id}: worker picked up job", flush=True)
     db = SessionLocal()
     try:
         run_record = db.query(Run).filter(Run.id == run_id).first()
@@ -75,18 +81,34 @@ async def async_run_agent(run_id: str):
         }
 
         async with AsyncPostgresSaver.from_conn_string(POSTGRES_URI) as checkpointer:
-            await checkpointer.setup()
+            print(f"Run {run_id}: setting up checkpointer", flush=True)
+            try:
+                await asyncio.wait_for(checkpointer.setup(), timeout=CHECKPOINT_SETUP_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"Checkpointer setup exceeded {CHECKPOINT_SETUP_TIMEOUT}s "
+                    "(cannot reach Postgres / pooler incompatible with async psycopg)"
+                )
             graph = builder.compile(checkpointer=checkpointer)
 
             # interrupt() surfaces differently across langgraph versions: some
             # raise GraphInterrupt out of ainvoke, others return with the
             # interrupt recorded in the checkpoint. Handle both by inspecting
             # the resulting state snapshot.
+            print(f"Run {run_id}: invoking graph", flush=True)
             try:
-                await graph.ainvoke(initial_state, config=config)
+                await asyncio.wait_for(
+                    graph.ainvoke(initial_state, config=config), timeout=RUN_TIMEOUT
+                )
             except GraphInterrupt:
                 pass
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"Graph execution exceeded RUN_TIMEOUT={RUN_TIMEOUT}s "
+                    "(stuck on an LLM or Postgres checkpoint call)"
+                )
 
+            print(f"Run {run_id}: graph returned, inspecting state", flush=True)
             snapshot = await graph.aget_state(config)
 
             if snapshot.next:
@@ -144,9 +166,14 @@ async def async_resume_agent(run_id: str, decision: str, note: str):
 
             # Resume graph by sending command to the hitl node
             try:
-                await graph.ainvoke(Command(resume=human_response), config=config)
+                await asyncio.wait_for(
+                    graph.ainvoke(Command(resume=human_response), config=config),
+                    timeout=RUN_TIMEOUT,
+                )
             except GraphInterrupt:
                 pass
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"Resume exceeded RUN_TIMEOUT={RUN_TIMEOUT}s")
 
             snapshot = await graph.aget_state(config)
 
