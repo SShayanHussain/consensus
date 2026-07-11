@@ -19,7 +19,17 @@ def get_llm():
     """
     global _llm
     if _llm is None:
-        _llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+        # transport="rest": RQ runs each job in a forked work-horse, and the
+        # default gRPC transport deadlocks after fork() (the Gemini call hangs
+        # forever). REST uses plain HTTP and is fork-safe. timeout/max_retries
+        # bound each call so a slow/failed call surfaces instead of hanging.
+        _llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0,
+            transport="rest",
+            timeout=60,
+            max_retries=2,
+        )
     return _llm
 
 
